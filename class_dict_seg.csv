@@ -1,10 +1,6 @@
 name, r, g, b
-water, 65, 155, 223
-trees, 57, 125, 73
-grass, 136, 176, 83
-flooded_vegetation, 122, 135, 198
-crops, 228, 150, 53
-shrub_and_scrub, 223, 195, 90
-built, 196, 40, 27
-bare, 165, 155, 143
-snow_and_ice, 179, 159, 225
+urban,0,255,255
+water,0,0,255
+forest,0,255,0
+argiculture,255,255,0
+road,255,0,255
