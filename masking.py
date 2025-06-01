@@ -2,43 +2,36 @@ import cv2
 import os
 import pandas as pd
 import numpy as np
-import shutil  # To copy files
 
 
-class ColorAnalyzer:
+class ColorMask:
     def __init__(self, img_array, color_ranges):
         """
-        Initialize the ColorAnalyzer class.
+        Initialize the ColorMask class.
 
         Parameters:
         - img_array: The input image array (BGR format).
         - color_ranges: A dictionary of color ranges in BGR format.
         """
-        self.img_array = img_array
-        self.color_ranges = color_ranges
+        self.img_array = img_array  # Original image in BGR format
+        self.color_ranges = color_ranges  # Color ranges loaded from the CSV
+        self.color_masks = {}  # Dictionary to store the generated masks
 
-    def generate_single_color_masks(self):
+    def create_color_masks(self):
         """
-        Generate new mask images for each color, where only one color is preserved,
-        and the rest of the mask is set to black.
-
-        Returns:
-        - A dictionary with color names as keys and the corresponding single-color masks as values.
+        Create binary masks for each color range defined in the color_ranges dictionary.
         """
-        single_color_masks = {}
-        for color_name, bgr in self.color_ranges.items():
-            lower_bound = np.array(bgr, dtype=np.uint8)
-            upper_bound = np.array(bgr, dtype=np.uint8)
+        for color_name, (bgr) in self.color_ranges.items():
+            lower_bound = np.array(bgr, dtype=np.uint8)  # Lower BGR bounds
+            upper_bound = np.array(bgr, dtype=np.uint8)  # Upper BGR bounds
 
             # Create a binary mask for the current color
             mask = cv2.inRange(self.img_array, lower_bound, upper_bound)
 
-            # Create a new mask image with only the current color and black background
-            single_color_image = np.zeros_like(self.img_array)
-            single_color_image[mask > 0] = bgr
-            single_color_masks[color_name] = single_color_image
+            # Store the mask
+            self.color_masks[color_name] = mask
 
-        return single_color_masks
+        return self.color_masks
 
 
 def load_color_ranges_from_csv(csv_path):
@@ -52,15 +45,12 @@ def load_color_ranges_from_csv(csv_path):
     - A dictionary with color names as keys and BGR values as tuples.
     """
     try:
-        if not os.path.exists(csv_path):
-            raise FileNotFoundError(f"CSV file not found at: {csv_path}")
-
         color_ranges = {}
         df = pd.read_csv(csv_path)
 
         for _, row in df.iterrows():
             color_name = row["name"]
-            bgr = (int(row[" b"]), int(row[" g"]), int(row[" r"]))
+            bgr = (int(row[" b"]), int(row[" g"]), int(row[" r"]))  # Convert RGB to BGR order
             color_ranges[color_name] = bgr
 
         return color_ranges
@@ -69,81 +59,94 @@ def load_color_ranges_from_csv(csv_path):
         return {}
 
 
-def save_single_color_masks_by_state(dataset_folder, color_ranges):
+def duplicate_images_to_match_masks(original_image_folder, mask_folder, output_folder):
     """
-    Save new mask images and corresponding images in class-specific subfolders for each state.
+    Duplicate and rename original images to match the filenames of binary masks.
+
+    Parameters:
+    - original_image_folder: Path to the folder containing original images.
+    - mask_folder: Path to the folder containing binary masks.
+    - output_folder: Path to save the renamed original images.
+    """
+    try:
+        # Ensure the output folder exists
+        os.makedirs(output_folder, exist_ok=True)
+
+        # Get a sorted list of mask files
+        mask_files = sorted(os.listdir(mask_folder))
+
+        for mask_file in mask_files:
+            # Get the base name of the mask file (without extension)
+            base_name = os.path.splitext(mask_file)[0]
+
+            # Find a matching original image
+            original_image_path = os.path.join(original_image_folder, base_name.split('_')[0] + ".png")
+
+            if os.path.exists(original_image_path):
+                # Save the original image with the mask filename in the output folder
+                renamed_image_path = os.path.join(output_folder, mask_file)
+                cv2.imwrite(renamed_image_path, cv2.imread(original_image_path))
+                print(f"Duplicated original image: {original_image_path} -> {renamed_image_path}")
+            else:
+                print(f"No matching original image found for mask: {mask_file}")
+
+    except Exception as e:
+        print(f"Error duplicating images: {e}")
+
+
+def process_images_and_masks(dataset_folder, color_ranges):
+    """
+    Process images and masks, creating binary masks and renaming/duplicating images to match them.
 
     Parameters:
     - dataset_folder: Path to the dataset folder.
     - color_ranges: A dictionary of color ranges.
     """
-    image_folder = os.path.join(dataset_folder, "images")
-    mask_folder = os.path.join(dataset_folder, "masks")
-    class_image_folder = os.path.join(dataset_folder, "class_images")
-    class_mask_folder = os.path.join(dataset_folder, "class_masks")
+    for folder_type in ["train", "test", "val"]:
+        # Paths for images and masks
+        image_folder = os.path.join(dataset_folder, f"{folder_type}_image")
+        mask_folder = os.path.join(dataset_folder, f"{folder_type}_mask")
+        binary_mask_folder = os.path.join(dataset_folder, f"{folder_type}_mask_binary_masking")
+        image_rename_folder = os.path.join(dataset_folder, f"{folder_type}_image_rename")
 
-    if not os.path.exists(image_folder) or not os.path.exists(mask_folder):
-        print("Error: 'images' or 'masks' folder is missing.")
-        return
-
-    os.makedirs(class_image_folder, exist_ok=True)
-    os.makedirs(class_mask_folder, exist_ok=True)
-
-    state_folders = [f for f in os.listdir(image_folder) if os.path.isdir(os.path.join(image_folder, f))]
-    for state in state_folders:
-        state_image_folder = os.path.join(image_folder, state)
-        state_mask_folder = os.path.join(mask_folder, state)
-
-        if not os.path.exists(state_mask_folder):
-            print(f"Skipping {state}: Missing mask folder.")
+        if not os.path.exists(image_folder) or not os.path.exists(mask_folder):
+            print(f"Skipping {folder_type}: Missing image or mask folder.")
             continue
 
-        state_class_image_folder = os.path.join(class_image_folder, state)
-        state_class_mask_folder = os.path.join(class_mask_folder, state)
-        os.makedirs(state_class_image_folder, exist_ok=True)
-        os.makedirs(state_class_mask_folder, exist_ok=True)
+        print(f"Processing {folder_type}...")
 
-        print(f"Processing {state} masks...")
+        # Create binary masks
+        os.makedirs(binary_mask_folder, exist_ok=True)
+        for img_file in os.listdir(mask_folder):
+            img_path = os.path.join(mask_folder, img_file)
 
-        for img_file in os.listdir(state_mask_folder):
-            img_path = os.path.join(state_mask_folder, img_file)
+            # Load the mask image
             img = cv2.imread(img_path)
 
             if img is None:
-                print(f"Error loading mask image: {img_file}")
+                print(f"Error loading image: {img_file}")
                 continue
 
-            analyzer = ColorAnalyzer(img, color_ranges)
-            single_color_masks = analyzer.generate_single_color_masks()
+            # Create ColorMask object
+            color_masker = ColorMask(img, color_ranges)
 
-            for class_name, single_color_image in single_color_masks.items():
-                class_image_subfolder = os.path.join(state_class_image_folder, class_name)
-                class_mask_subfolder = os.path.join(state_class_mask_folder, class_name)
-                os.makedirs(class_image_subfolder, exist_ok=True)
-                os.makedirs(class_mask_subfolder, exist_ok=True)
+            # Generate color masks
+            colored_masks = color_masker.create_color_masks()
 
-                # Save the single-color mask
-                mask_output_path = os.path.join(
-                    class_mask_subfolder, f"{os.path.splitext(img_file)[0]}_{class_name}_mask.png"
-                )
-                cv2.imwrite(mask_output_path, single_color_image)
+            # Save each binary mask
+            for color_name, mask in colored_masks.items():
+                output_path = os.path.join(binary_mask_folder, f"{os.path.splitext(img_file)[0]}_{color_name}_mask.png")
+                cv2.imwrite(output_path, mask)
+                print(f"Saved binary mask: {output_path}")
 
-                # Copy the original image from 'images' to the corresponding 'class_images' subfolder
-                original_image_path = os.path.join(state_image_folder, img_file)
-                if os.path.exists(original_image_path):
-                    copied_image_output_path = os.path.join(
-                        class_image_subfolder, f"{os.path.splitext(img_file)[0]}_{class_name}_image.png"
-                    )
-                    shutil.copy(original_image_path, copied_image_output_path)
-
-        print(f"Saved class-specific masks for {state} in: {state_class_mask_folder}")
-        print(f"Saved class-specific images for {state} in: {state_class_image_folder}")
+        # Rename and duplicate images to match binary masks
+        duplicate_images_to_match_masks(image_folder, binary_mask_folder, image_rename_folder)
 
 
 if __name__ == "__main__":
     # Define paths
-    dataset_folder = r"C:\Users\prash\OneDrive\Desktop\data07\data"
-    csv_path = r"C:\Users\prash\OneDrive\Desktop\data07\class_dict_seg.csv"
+    dataset_folder = "dataset"
+    csv_path = os.path.join(dataset_folder, "class_dict_seg.csv")
 
     # Load color ranges
     color_ranges = load_color_ranges_from_csv(csv_path)
@@ -151,4 +154,4 @@ if __name__ == "__main__":
     if not color_ranges:
         print("No color ranges loaded. Exiting.")
     else:
-        save_single_color_masks_by_state(dataset_folder, color_ranges)
+        process_images_and_masks(dataset_folder, color_ranges)
